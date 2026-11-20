@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ランタン遠隔メンテ</title>
+<!-- tools/make_dashboard.py が __BASE__ と __KEY__ を埋めて remote_dashboard.html を作る。できたファイルは人に渡さない -->
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<style>
+:root{--bg:#14110f;--panel:#201a16;--line:#3a3029;--ink:#f1e9e0;--muted:#a89a8c;--lamp:#f0934a;--ok:#7fcf9c;--warn:#e8b552;--ng:#f08a78;
+ font-family:"Noto Sans JP","Hiragino Sans","Yu Gothic UI",system-ui,sans-serif;color-scheme:dark}
+body{margin:0;background:var(--bg);color:var(--ink);font-size:14px}
+.wrap{max-width:1100px;margin:0 auto;padding:16px;display:grid;gap:14px}
+h1{font-size:20px;margin:0}
+.top{display:flex;flex-wrap:wrap;gap:10px 22px;align-items:baseline}
+.pill{display:inline-block;border-radius:999px;padding:2px 10px;font-size:12px;border:1px solid var(--line)}
+.pill.ok{color:var(--ok);border-color:var(--ok)}.pill.ng{color:var(--ng);border-color:var(--ng)}.pill.warn{color:var(--warn);border-color:var(--warn)}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}
+.panel h2{font-size:13px;color:var(--muted);font-weight:500;margin:0 0 10px;letter-spacing:.04em}
+.lanterns{display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:14px}
+.lan{display:flex;flex-direction:column;align-items:center;gap:6px;font-size:12px;text-align:center}
+.bulb{width:64px;height:64px;border-radius:50%;background:#000;border:1px solid var(--line);transition:background .4s,box-shadow .4s}
+.bulb.fx{background:conic-gradient(red,orange,yellow,lime,cyan,blue,magenta,red)!important}
+.lan b{font-size:14px}.lan .ph{color:var(--muted)}
+.lan.stale .bulb{opacity:.25}.lan.stale .ph{color:var(--ng)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+button{font:inherit;padding:10px;border-radius:8px;border:1px solid var(--line);background:#2b231d;color:var(--ink);cursor:pointer}
+button:hover{border-color:var(--lamp)}button.sel{outline:2px solid var(--lamp)}
+button:focus-visible{outline:2px solid var(--lamp)}
+.cols{display:grid;grid-template-columns:1.2fr 1fr;gap:14px}
+@media (max-width:820px){.cols{grid-template-columns:1fr}}
+.row{display:grid;grid-template-columns:1fr 64px;gap:4px 10px;align-items:center;margin-top:8px}
+.row label{grid-column:1/-1;display:flex;justify-content:space-between}
+.row input{accent-color:var(--lamp)}
+.log div{padding:3px 0;border-bottom:1px dashed var(--line);font-variant-numeric:tabular-nums}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.ng{color:var(--ng)}.sub{color:var(--muted)}
+#ack{min-height:1.4em}
+</style></head><body>
+<div class="wrap">
+ <div class="panel" id="login" hidden>
+  <h2>合言葉を入れてください（この端末が覚えます）</h2>
+  <div style="display:grid;gap:8px;max-width:520px">
+   <label for="in_view">見る用の合言葉</label><input id="in_view" autocomplete="off" style="padding:8px;font:inherit">
+   <label for="in_ctrl">操作用の合言葉（見るだけなら空のまま）</label><input id="in_ctrl" type="password" autocomplete="off" style="padding:8px;font:inherit">
+   <button id="in_go">はじめる</button><span class="sub" id="in_err"></span>
+  </div>
+ </div>
+ <div class="top">
+  <h1>ランタン遠隔メンテ</h1>
+  <span id="conn" class="pill">中継に接続中…</span>
+  <span id="age" class="pill">-</span>
+  <span>親機の時刻 <b id="mt">-</b></span>
+  <span class="sub" id="info">-</span>
+ </div>
+
+ <div class="panel">
+  <h2>いまの光り方（子機が2秒ごとに知らせる電球の状態。ここに来るまで数秒遅れます）</h2>
+  <div class="lanterns" id="lans"></div>
+  <div class="sub" id="sigstate" style="margin-top:10px"></div>
+ </div>
+
+ <div class="cols">
+  <div class="panel">
+   <h2>操作（親機が署名を確かめてから実行します）</h2>
+   <div class="sub">動かし方</div>
+   <div class="grid" style="margin:6px 0 12px">
+    <button data-c="set sigmode 1" data-sm="1">合図で動かす（本番）</button><button data-c="set sigmode 0" data-sm="0">時計だけ</button><button data-c="set sigmode 2" data-sm="2">呼吸だけ</button>
+   </div>
+   <div class="sub">ゾートロープ稼働中の光り方</div>
+   <div class="grid" style="margin:6px 0 12px">
+    <button data-c="mode 1" data-m="1">虹色（自作）</button><button data-c="mode 5" data-m="5">カラフル（自作）</button><button data-c="mode 4" data-m="4">点滅（自作）</button>
+    <button data-c="mode 2" data-m="2">カラフル（内蔵）</button><button data-c="mode 3" data-m="3">点滅（内蔵）</button><button data-c="mode 0" data-m="0">消灯</button>
+   </div>
+   <div class="sub">その場で確かめる（会場のランタンが実際に光ります）</div>
+   <div class="grid" style="margin:6px 0 12px">
+    <button data-c="preview pre">予告</button><button data-c="preview show">虹色</button><button data-c="preview after">余韻</button><button data-c="preview stop">ふだんに戻す</button>
+   </div>
+   <div class="grid">
+    <button data-c="sig 1" data-confirm="1">テスト：開始「1」</button><button data-c="sig 0" data-confirm="1">テスト：終了「0」</button><button data-c="ntp">ネットで時刻を合わせる</button>
+   </div>
+   <div id="ack" class="sub" style="margin-top:10px"></div>
+   <div id="sl" style="margin-top:6px"></div>
+  </div>
+  <div style="display:grid;gap:14px">
+   <div class="panel">
+    <h2>Mac から届いた合図の履歴（新しい順）</h2>
+    <div class="log" id="lg">まだ届いていません</div>
+   </div>
+   <div class="panel">
+    <h2>出来事の記録（新しい順・最新200件）</h2>
+    <div class="log" id="ev" style="max-height:420px;overflow:auto">まだ届いていません</div>
+   </div>
+  </div>
+ </div>
+</div>
+<script>
+// 公開版（make_dashboard.py --public）では空。最初に「見る用」「操作用」の合言葉を入れてもらい、この端末に覚える
+let BASE="", KEY="";
+const PUBLIC=BASE==="";
+if(PUBLIC){ try{BASE=localStorage.getItem('lan_view')||'';KEY=localStorage.getItem('lan_ctrl')||'';}catch(e){} }
+const $=id=>document.getElementById(id);
+const pad=n=>String(n).padStart(2,'0');
+const hm=s=>pad(Math.floor(s/3600))+':'+pad(Math.floor(s/60)%60)+':'+pad(s%60);
+const PH={0:'閉場（消灯）',1:'ふだんの呼吸',2:'予告',3:'消灯して合図待ち',4:'稼働（虹色など）',5:'余韻',255:'時刻なし'};
+let st=null, stAt=0, client=null;
+
+// ---- 署名（HMAC-SHA256）----
+// ブラウザの暗号機能が使えない開き方（file を直接など）でも動くよう、SHA-256 を自前で持つ
+function sha256(bytes){
+ const K=[0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+ let H=[0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+ const l=bytes.length,n=((l+9+63)>>6)<<6,m=new Uint8Array(n);m.set(bytes);m[l]=0x80;
+ const dv=new DataView(m.buffer);dv.setUint32(n-4,l*8);dv.setUint32(n-8,Math.floor(l/0x20000000));
+ const w=new Uint32Array(64),r=(x,s)=>(x>>>s)|(x<<(32-s));
+ for(let o=0;o<n;o+=64){
+  for(let i=0;i<16;i++)w[i]=dv.getUint32(o+i*4);
+  for(let i=16;i<64;i++){const a=w[i-15],b=w[i-2];w[i]=(w[i-16]+(r(a,7)^r(a,18)^(a>>>3))+w[i-7]+(r(b,17)^r(b,19)^(b>>>10)))>>>0;}
+  let [a,b,c,d,e,f,g,h]=H;
+  for(let i=0;i<64;i++){const t1=(h+(r(e,6)^r(e,11)^r(e,25))+((e&f)^(~e&g))+K[i]+w[i])>>>0,t2=((r(a,2)^r(a,13)^r(a,22))+((a&b)^(a&c)^(b&c)))>>>0;
+   h=g;g=f;f=e;e=(d+t1)>>>0;d=c;c=b;b=a;a=(t1+t2)>>>0;}
+  H=H.map((x,i)=>(x+[a,b,c,d,e,f,g,h][i])>>>0);
+ }
+ const out=new Uint8Array(32);H.forEach((x,i)=>new DataView(out.buffer).setUint32(i*4,x));return out;
+}
+async function hmac(msg){
+ const enc=s=>new TextEncoder().encode(s);
+ let k=enc(KEY);if(k.length>64)k=sha256(k);
+ const kp=new Uint8Array(64);kp.set(k);
+ const ip=kp.map(b=>b^0x36),op=kp.map(b=>b^0x5c),mb=enc(msg);
+ const inner=new Uint8Array(64+mb.length);inner.set(ip);inner.set(mb,64);
+ const ih=sha256(inner),outer=new Uint8Array(96);outer.set(op);outer.set(ih,64);
+ return [...sha256(outer)].map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+async function send(cmd){
+ if(!KEY){$('ack').textContent='操作するには「操作用」の合言葉が必要です（見るだけの設定です）';return;}
+ if(!client||!client.connected){$('ack').textContent='中継につながっていません';return;}
+ const body=Date.now()+' '+cmd;
+ client.publish(BASE+'/cmd',(await hmac(body))+' '+body);
+ $('ack').textContent='送信：'+cmd+'（返事を待っています）';
+}
+
+// ---- 表示 ----
+function lampColor(n){ // [id,seenAgo,bulbOn,phase,kind,bri,r,g,b,md5]
+ const [,,on,,kind,bri,r,g,b]=n; if(!on||kind===0) return null;
+ let c=kind===1?[255,150,50]:[r,g,b]; const k=Math.max(0.12,Math.min(1,bri/100));
+ return c.map(v=>Math.round(v*k));
+}
+function drawLans(){
+ if(!st) return;
+ const age=(Date.now()-stAt)/1000;
+ $('lans').innerHTML=st.nodes.map(n=>{
+  const seen=n[1]+age, c=lampColor(n), fx=n[4]===3&&n[2];
+  const bg=c?`rgb(${c})`:'#000', glow=c?`0 0 ${10+n[5]/3}px rgb(${c})`:'none';
+  return `<div class="lan ${seen>15?'stale':''}"><div class="bulb ${fx?'fx':''}" style="background:${bg};box-shadow:${glow}"></div>
+   <b>${n[0]}</b><span class="ph">${seen>15?'返事なし '+Math.round(seen)+'秒':(PH[n[3]]||'-')}</span>
+   <span class="sub">${n[2]?'明るさ '+n[5]+'%':'電球につながっていない'}</span></div>`;}).join('');
+}
+function render(){
+ if(!st) return;
+ $('mt').textContent=st.time;
+ const rs=st.rssi; $('info').textContent=`会場Wi-Fi ${rs}dBm（会場内のスマホからは http://${st.ip||'-'}）／${st.ntp?'ネット時刻: '+st.ntp:'ネット時刻なし'} ／ 親機の起動から ${Math.round(st.up/3600*10)/10} 時間`;
+ const sm={0:'時計だけで動かす',1:'合図で動かす（本番）',2:'呼吸だけ'}[st.sigmode];
+ $('sigstate').textContent=`動かし方：${sm}　${st.running?'／ いま虹色中（合図「1」を受けている）':''}${st.preview?' ／ プレビュー中':''}　子機 ${st.nodes.filter(n=>n[1]<15).length} 台から返事`;
+ document.querySelectorAll('[data-sm]').forEach(b=>b.classList.toggle('sel',+b.dataset.sm===st.sigmode));
+ document.querySelectorAll('[data-m]').forEach(b=>b.classList.toggle('sel',+b.dataset.m===st.mode)); SL.forEach(s=>{const r=$('r_'+s[0]);if(document.activeElement!==r&&st.p[s[0]]!==undefined){r.value=st.p[s[0]];$('v_'+s[0]).textContent=st.p[s[0]]+s[5];}});
+ drawLans();
+}
+setInterval(()=>{ if(!st) return; const a=Math.round((Date.now()-stAt)/1000);
+ $('age').textContent=a<10?'最新':a+'秒前の情報'; $('age').className='pill '+(a<10?'ok':a<60?'warn':'ng'); drawLans(); },1000);
+
+const LK={S:['開始「1」を受けた','ok'],E:['終了「0」を受けた','ok'],s:['「1」（虹色中なので無視）','warn'],e:['「0」（始まっていないので無視）','warn'],
+ B:['親機が起動（Mac がポートを開いた／電源）','sub'],T:['テストボタン「1」','sub'],t:['テストボタン「0」','sub'],X:['合図でもコマンドでもない文字','ng'],
+ I:['Mac から「ID?」→「illumi」と返した','ok']};
+const raw=r=>r===49?'文字"1"':r===48?'文字"0"':r===1?'バイト0x01':r===0?'バイト0x00':'0x'+r.toString(16).padStart(2,'0');
+function renderLog(a){ $('lg').innerHTML=a.length?a.map(e=>{const k=LK[e[1]]||[e[1],''];
+ return `<div class="${k[1]}">${hm(e[0])}　${k[0]}${'SEsetX'.includes(e[1])?' <span class="sub">'+raw(e[2])+'</span>':''}</div>`}).join(''):'まだ届いていません'; }
+
+// ---- 出来事の記録 ----
+const EK={R:['親機が起動','sub'],N:['子機 {id} の返事が途切れた','ng'],n:['子機 {id} の返事が戻った','ok'],M:['子機 {id} が再起動した','warn'],
+ L:['子機 {id} の電球が切れた','ng'],l:['子機 {id} の電球がつながった','ok'],W:['親機の会場Wi-Fiが切れた','warn'],w:['親機の会場Wi-Fiがつながった','sub'],
+ Q:['親機の中継が切れた','warn'],q:['親機の中継がつながった','sub'],G:['中継役が途切れた','ng'],g:['中継役が戻った','ok'],T:['ネットで時刻を合わせた（ずれ {v} 秒）','sub']};
+function renderEv(a){ $('ev').innerHTML=a.length?a.map(e=>{const [mo,d,sec,k,id,val]=e;const t=EK[k]||[k,''];
+ return `<div class="${t[1]}">${mo}/${d} ${hm(sec)}　${t[0].replace('{id}',id).replace('{v}',(val/10).toFixed(1))}</div>`}).join(''):'まだありません'; }
+
+// ---- つまみ ----
+const SL=[['gain','全体の明るさ',5,100,1,'%'],['lo','呼吸のいちばん暗い',1,60,1,'%'],['hi','呼吸のいちばん明るい',20,100,1,'%'],
+ ['rbbri','稼働中の明るさ',10,100,1,'%'],['blink','点滅（自作）1回の長さ',0.2,3,0.1,'秒'],['colorful','カラフル（自作）1色の長さ',0.3,10,0.1,'秒'],
+ ['darkafter','余韻の暗転',0,15,0.5,'秒'],['stagger','余韻：灯るずれ',0,3,0.1,'秒'],['offlead','開始の何秒前に消灯',0,180,5,'秒'],
+ ['prelen','予告の長さ',0,300,5,'秒'],['afterlen','余韻の長さ',20,300,5,'秒'],['waitmax','合図を待つ最長',0,600,10,'秒'],['showmax','「0」が来ないときの打ち切り',60,1800,30,'秒']];
+$('sl').innerHTML=SL.map(s=>`<div class="row"><label for="r_${s[0]}"><span>${s[1]}</span><b id="v_${s[0]}">-</b></label>
+ <input type="range" id="r_${s[0]}" min="${s[2]}" max="${s[3]}" step="${s[4]}" style="grid-column:1/-1"></div>`).join('');
+const tmr={};
+SL.forEach(s=>{const r=$('r_'+s[0]);r.oninput=()=>{$('v_'+s[0]).textContent=r.value+s[5];clearTimeout(tmr[s[0]]);
+ tmr[s[0]]=setTimeout(()=>send('set '+s[0]+' '+r.value),400);};});
+document.querySelectorAll('[data-c]').forEach(b=>b.onclick=()=>{ if(b.dataset.confirm&&!confirm('会場のランタンに「'+b.textContent+'」を送りますか？'))return; send(b.dataset.c); });
+
+// ---- 中継 ----
+if(PUBLIC){
+ $('login').hidden=!!BASE;
+ const fg=document.createElement('button');fg.textContent='この端末の合言葉を消す';fg.style.marginLeft='auto';
+ fg.onclick=()=>{try{localStorage.removeItem('lan_view');localStorage.removeItem('lan_ctrl');}catch(e){}location.reload();};
+ document.querySelector('.top').appendChild(fg);
+ $('in_go').onclick=()=>{const v=$('in_view').value.trim();if(!v.startsWith('mygs-lantern-')){$('in_err').textContent='見る用の合言葉が違います';return;}
+  try{localStorage.setItem('lan_view',v);if($('in_ctrl').value.trim())localStorage.setItem('lan_ctrl',$('in_ctrl').value.trim());}catch(e){}location.reload();};
+}
+if(BASE) client=mqtt.connect('wss://broker.hivemq.com:8884/mqtt',{clientId:'lantern-pc-'+Math.random().toString(16).slice(2,10),reconnectPeriod:5000});
+if(client)client.on('connect',()=>{$('conn').textContent='中継につながっています';$('conn').className='pill ok';
+ client.subscribe([BASE+'/status',BASE+'/log',BASE+'/ack',BASE+'/online',BASE+'/events']);});
+if(client)client.on('close',()=>{$('conn').textContent='中継から切れています（再接続中）';$('conn').className='pill ng';});
+if(client)client.on('message',(t,m)=>{const s=m.toString();
+ if(t.endsWith('/status')){try{st=JSON.parse(s);stAt=Date.now();render();}catch(e){}}
+ else if(t.endsWith('/log')){try{renderLog(JSON.parse(s));}catch(e){}}
+ else if(t.endsWith('/events')){try{renderEv(JSON.parse(s));}catch(e){}}
+ else if(t.endsWith('/ack')){$('ack').textContent='親機の返事：'+s;$('ack').className=s.startsWith('OK')?'ok':'ng';}
+ else if(t.endsWith('/online')&&s==='0'){$('conn').textContent='親機が中継から外れています';$('conn').className='pill warn';}
+});
+</script></body></html>
