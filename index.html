@@ -39,7 +39,7 @@ button:focus-visible{outline:2px solid var(--lamp)}
   <h2>合言葉を入れてください（この端末が覚えます）</h2>
   <div style="display:grid;gap:8px;max-width:520px">
    <label for="in_view">見る用の合言葉</label><input id="in_view" autocomplete="off" style="padding:8px;font:inherit">
-   <label for="in_ctrl">操作用の合言葉（見るだけなら空のまま）</label><input id="in_ctrl" type="password" autocomplete="off" style="padding:8px;font:inherit">
+   <label for="in_ctrl">メンテナンス用の合言葉（見るだけなら空のまま）</label><input id="in_ctrl" type="password" autocomplete="off" style="padding:8px;font:inherit">
    <button id="in_go">はじめる</button><span class="sub" id="in_err"></span>
   </div>
  </div>
@@ -58,7 +58,12 @@ button:focus-visible{outline:2px solid var(--lamp)}
  </div>
 
  <div class="cols">
-  <div class="panel">
+  <div class="panel" id="viewonly" hidden>
+   <h2>見るだけのモード</h2>
+   <p class="sub" style="margin:0 0 10px">光り方・状態・履歴・出来事の記録を見られます。設定や光り方を変えるには、メンテナンス用の合言葉が必要です。</p>
+   <button id="to_maint">メンテナンスモードに入る</button>
+  </div>
+  <div class="panel" id="ops">
    <h2>操作（親機が署名を確かめてから実行します）</h2>
    <div class="sub">動かし方</div>
    <div class="grid" style="margin:6px 0 12px">
@@ -193,6 +198,12 @@ SL.forEach(s=>{const r=$('r_'+s[0]);r.oninput=()=>{$('v_'+s[0]).textContent=r.va
 document.querySelectorAll('[data-c]').forEach(b=>b.onclick=()=>{ if(b.dataset.confirm&&!confirm('会場のランタンに「'+b.textContent+'」を送りますか？'))return; send(b.dataset.c); });
 
 // ---- 中継 ----
+// 見るだけ（メンテナンス用の合言葉なし）のときは、操作の部分を出さない
+const MAINT=!!KEY;
+$('ops').hidden=!MAINT;
+$('viewonly').hidden=MAINT||!BASE;
+{const b=document.createElement('span');b.className='pill '+(MAINT?'warn':'');b.textContent=MAINT?'メンテナンスモード':'見るだけ';document.querySelector('.top').insertBefore(b,$('conn'));}
+$('to_maint').onclick=()=>{ if(PUBLIC){ $('login').hidden=false; $('in_view').value=BASE; $('in_ctrl').focus(); window.scrollTo(0,0); } };
 if(PUBLIC){
  $('login').hidden=!!BASE;
  const fg=document.createElement('button');fg.textContent='この端末の合言葉を消す';fg.style.marginLeft='auto';
