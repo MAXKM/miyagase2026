@@ -229,8 +229,24 @@ if(PUBLIC){
  const fg=document.createElement('button');fg.textContent='この端末の合言葉を消す';fg.style.marginLeft='auto';
  fg.onclick=()=>{try{localStorage.removeItem('lan_view');localStorage.removeItem('lan_ctrl');}catch(e){}location.reload();};
  document.querySelector('.top').appendChild(fg);
- $('in_go').onclick=()=>{const v=$('in_view').value.trim();if(!v.startsWith('mygs-lantern-')){$('in_err').textContent='見る用の合言葉が違います';return;}
-  try{localStorage.setItem('lan_view',v);if($('in_ctrl').value.trim())localStorage.setItem('lan_ctrl',$('in_ctrl').value.trim());}catch(e){}location.reload();};
+ $('in_go').onclick=()=>{
+  const clean=s=>s.trim().replace(/^["'“”]+|["'“”;]+$/g,'').trim();   // コピーで付いてきた " や ; を取る
+  const v=clean($('in_view').value), c=clean($('in_ctrl').value).toLowerCase();
+  if(!/^mygs-lantern-[0-9a-f]{16}$/.test(v)){$('in_err').textContent='見る用の合言葉が違います（mygs-lantern- で始まる英数字）';return;}
+  if(c&&!/^[0-9a-f]{32}$/.test(c)){$('in_err').textContent='メンテナンス用の合言葉が違います（0〜9とa〜fの32文字）';return;}
+  const save=()=>{try{localStorage.setItem('lan_view',v);if(c)localStorage.setItem('lan_ctrl',c);else localStorage.removeItem('lan_ctrl');}catch(e){}location.reload();};
+  if(!c){save();return;}
+  // メンテナンス用の合言葉は、親機に「確認だけの合図」を署名して送り、署名が通るか確かめてから覚える（ランタンには影響なし）
+  $('in_err').textContent='親機に確かめています…（最大20秒）';$('in_go').disabled=true;
+  const cl=mqtt.connect('wss://broker.hivemq.com:8884/mqtt',{clientId:'lantern-chk-'+Math.random().toString(16).slice(2,10)});
+  let done=false;const fin=(ok,msg)=>{if(done)return;done=true;try{cl.end(true);}catch(e){}$('in_go').disabled=false;if(ok)save();else $('in_err').textContent=msg;};
+  setTimeout(()=>fin(false,'親機から返事がなく、確かめられませんでした（会場のネットを確認してから、もう一度）'),20000);
+  cl.on('connect',async()=>{cl.subscribe(v+'/ack');const KEY0=KEY;KEY=c;const body=Date.now()+' check';const sg=await hmac(body);KEY=KEY0;
+   setTimeout(()=>cl.publish(v+'/cmd',sg+' '+body),500);});
+  cl.on('message',(t,m)=>{const s=m.toString();
+   if(s.includes('署名'))fin(false,'メンテナンス用の合言葉が違います');
+   else if(s.startsWith('NG')||s.startsWith('OK'))fin(!s.includes('時刻'),s.includes('時刻')?'PCやスマホの時計がずれています（自動設定にしてください）':'');});
+ };
 }
 if(BASE) client=mqtt.connect('wss://broker.hivemq.com:8884/mqtt',{clientId:'lantern-pc-'+Math.random().toString(16).slice(2,10),reconnectPeriod:5000});
 if(client)client.on('connect',()=>{$('conn').textContent='中継につながっています';$('conn').className='pill ok';
