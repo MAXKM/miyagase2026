@@ -85,6 +85,8 @@ button:focus-visible{outline:2px solid var(--lamp)}
    <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:6px">
     <label for="t_open">開場</label><input type="time" id="t_open" style="padding:6px;font:inherit">
     <label for="t_close">消灯</label><input type="time" id="t_close" style="padding:6px;font:inherit">
+    <label for="t_showfrom">上映の最初の回</label><input type="time" id="t_showfrom" style="padding:6px;font:inherit">
+    <label for="t_showto">最後の回</label><input type="time" id="t_showto" style="padding:6px;font:inherit">
     <button id="t_save">この時刻にする</button>
    </div>
    <div id="ack" class="sub" style="margin-top:10px"></div>
@@ -173,7 +175,7 @@ function render(){
  document.querySelectorAll('[data-sm]').forEach(b=>b.classList.toggle('sel',+b.dataset.sm===st.sigmode));
  document.querySelectorAll('[data-m]').forEach(b=>b.classList.toggle('sel',+b.dataset.m===st.mode)); SL.forEach(s=>{const r=$('r_'+s[0]);if(document.activeElement!==r&&st.p[s[0]]!==undefined){r.value=st.p[s[0]];$('v_'+s[0]).textContent=st.p[s[0]]+s[5];}});
  const mm=v=>pad(Math.floor(Math.round(v)/60))+':'+pad(Math.round(v)%60);
- ['open','close'].forEach(n=>{const el=$('t_'+n);if(document.activeElement!==el&&!el.dataset.edit&&st.p[n]!==undefined)el.value=mm(st.p[n]);});
+ ['open','close','showfrom','showto'].forEach(n=>{const el=$('t_'+n);if(document.activeElement!==el&&!el.dataset.edit&&st.p[n]!==undefined)el.value=mm(st.p[n]);});
  drawLans();
 }
 setInterval(()=>{ if(!st) return; const a=Math.round((Date.now()-stAt)/1000);
@@ -203,14 +205,15 @@ $('sl').innerHTML=SL.map(s=>`<div class="row"><label for="r_${s[0]}"><span>${s[1
 const tmr={};
 SL.forEach(s=>{const r=$('r_'+s[0]);r.oninput=()=>{$('v_'+s[0]).textContent=r.value+s[5];clearTimeout(tmr[s[0]]);
  tmr[s[0]]=setTimeout(()=>send('set '+s[0]+' '+r.value),400);};});
-['open','close'].forEach(n=>$('t_'+n).oninput=()=>{$('t_'+n).dataset.edit='1';});
+const TN=['open','close','showfrom','showto'];
+TN.forEach(n=>$('t_'+n).oninput=()=>{$('t_'+n).dataset.edit='1';});
 $('t_save').onclick=async()=>{
  const toMin=v=>{const [h,m]=v.split(':').map(Number);return h*60+m;};
- const o=$('t_open').value,c=$('t_close').value;
- if(!o||!c){$('ack').textContent='開場と消灯の時刻を入れてください';return;}
- if(!confirm(`開場 ${o}、消灯 ${c} にしますか？`))return;
- await send('set open '+toMin(o)); setTimeout(()=>send('set close '+toMin(c)),600);
- ['open','close'].forEach(n=>delete $('t_'+n).dataset.edit);
+ const v=TN.map(n=>$('t_'+n).value);
+ if(v.some(x=>!x)){$('ack').textContent='4つの時刻を入れてください';return;}
+ if(!confirm(`開場 ${v[0]}、消灯 ${v[1]}、上映 ${v[2]}〜${v[3]} にしますか？`))return;
+ TN.forEach((n,i)=>setTimeout(()=>send('set '+n+' '+toMin(v[i])),i*700));
+ TN.forEach(n=>delete $('t_'+n).dataset.edit);
 };
 document.querySelectorAll('[data-c]').forEach(b=>b.onclick=()=>{ if(b.dataset.confirm&&!confirm('会場のランタンに「'+b.textContent+'」を送りますか？'))return; send(b.dataset.c); });
 
